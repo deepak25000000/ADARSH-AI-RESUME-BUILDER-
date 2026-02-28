@@ -1,90 +1,79 @@
 /**
  * Auth Context — manages user state, login, logout, registration, Google auth.
- * Persists session in localStorage and verifies JWT token on app load.
+ * Sessions persist in localStorage. Only explicit logout clears auth state.
  */
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authAPI } from '../services/api';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-    const [user, setUser] = useState(null);
+    // Initialize user from localStorage synchronously to prevent flash
+    const [user, setUser] = useState(() => {
+        try {
+            const saved = localStorage.getItem('user');
+            return saved ? JSON.parse(saved) : null;
+        } catch {
+            return null;
+        }
+    });
     const [loading, setLoading] = useState(true);
-    const isAuthenticating = useRef(false);
 
-    // On app load: restore user from localStorage and verify token with backend
+    // On mount: verify token silently in background — NEVER clear user on failure
     useEffect(() => {
         const token = localStorage.getItem('token');
-        const savedUser = localStorage.getItem('user');
-
-        if (token && savedUser) {
-            // Restore user immediately to prevent redirect flash
-            try { setUser(JSON.parse(savedUser)); } catch { }
-            // Verify token with backend in background
+        if (token && user) {
+            // Token exists, user already loaded from localStorage — just verify in background
             authAPI.getProfile()
                 .then((res) => {
+                    // Update with fresh profile data
                     setUser(res.data);
                     localStorage.setItem('user', JSON.stringify(res.data));
                 })
                 .catch(() => {
-                    // Only clear if not currently in an auth flow (prevents race condition)
-                    if (!isAuthenticating.current) {
-                        localStorage.removeItem('token');
-                        localStorage.removeItem('user');
-                        setUser(null);
-                    }
+                    // Silently fail — keep cached user, don't logout
+                    // User will only be logged out when they explicitly click logout
+                    // or when a new login attempt is made
+                    console.warn('Profile verification failed, keeping cached session');
                 })
                 .finally(() => setLoading(false));
-        } else if (token) {
-            // Token exists but no saved user — verify and fetch
+        } else if (token && !user) {
+            // Token but no cached user — try to fetch
             authAPI.getProfile()
                 .then((res) => {
                     setUser(res.data);
                     localStorage.setItem('user', JSON.stringify(res.data));
                 })
                 .catch(() => {
-                    if (!isAuthenticating.current) {
-                        localStorage.removeItem('token');
-                        localStorage.removeItem('user');
-                        setUser(null);
-                    }
+                    // Token is invalid and no cached user — clear token
+                    localStorage.removeItem('token');
                 })
                 .finally(() => setLoading(false));
         } else {
             setLoading(false);
         }
-    }, []);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const login = useCallback(async (email, password) => {
-        isAuthenticating.current = true;
-        try {
-            const res = await authAPI.login({ email, password });
-            const token = res.data.access_token;
-            localStorage.setItem('token', token);
-            // Fetch full profile after storing token
-            const profile = await authAPI.getProfile();
-            setUser(profile.data);
-            localStorage.setItem('user', JSON.stringify(profile.data));
-            return profile.data;
-        } finally {
-            isAuthenticating.current = false;
-        }
+        const res = await authAPI.login({ email, password });
+        const token = res.data.access_token;
+        localStorage.setItem('token', token);
+        // Fetch profile
+        const profile = await authAPI.getProfile();
+        setUser(profile.data);
+        localStorage.setItem('user', JSON.stringify(profile.data));
+        return profile.data;
     }, []);
 
     const googleLogin = useCallback(async (credential) => {
-        isAuthenticating.current = true;
-        try {
-            const res = await authAPI.googleAuth({ credential });
-            const token = res.data.access_token;
-            localStorage.setItem('token', token);
-            // Fetch full profile after storing token
-            const profile = await authAPI.getProfile();
-            setUser(profile.data);
-            localStorage.setItem('user', JSON.stringify(profile.data));
-            return profile.data;
-        } finally {
-            isAuthenticating.current = false;
-        }
+        const res = await authAPI.googleAuth({ credential });
+        const token = res.data.access_token;
+        localStorage.setItem('token', token);
+        // Fetch profile
+        const profile = await authAPI.getProfile();
+        setUser(profile.data);
+        localStorage.setItem('user', JSON.stringify(profile.data));
+        return profile.data;
     }, []);
 
     const register = useCallback(async (data) => {
@@ -93,20 +82,15 @@ export function AuthProvider({ children }) {
     }, []);
 
     const registerAndLogin = useCallback(async (data) => {
-        isAuthenticating.current = true;
-        try {
-            await authAPI.register(data);
-            // Auto-login after successful registration
-            const loginRes = await authAPI.login({ email: data.email, password: data.password });
-            const token = loginRes.data.access_token;
-            localStorage.setItem('token', token);
-            const profile = await authAPI.getProfile();
-            setUser(profile.data);
-            localStorage.setItem('user', JSON.stringify(profile.data));
-            return profile.data;
-        } finally {
-            isAuthenticating.current = false;
-        }
+        await authAPI.register(data);
+        // Auto-login after registration
+        const loginRes = await authAPI.login({ email: data.email, password: data.password });
+        const token = loginRes.data.access_token;
+        localStorage.setItem('token', token);
+        const profile = await authAPI.getProfile();
+        setUser(profile.data);
+        localStorage.setItem('user', JSON.stringify(profile.data));
+        return profile.data;
     }, []);
 
     const logout = useCallback(() => {
@@ -115,7 +99,13 @@ export function AuthProvider({ children }) {
         setUser(null);
     }, []);
 
-    const updateUser = useCallback((data) => setUser((prev) => ({ ...prev, ...data })), []);
+    const updateUser = useCallback((data) => {
+        setUser((prev) => {
+            const updated = { ...prev, ...data };
+            localStorage.setItem('user', JSON.stringify(updated));
+            return updated;
+        });
+    }, []);
 
     return (
         <AuthContext.Provider value={{ user, loading, login, googleLogin, register, registerAndLogin, logout, updateUser }}>
