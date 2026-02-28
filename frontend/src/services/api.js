@@ -18,15 +18,24 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
-// Handle 401 responses
+// Handle 401 responses — only clear token for non-auth requests
 api.interceptors.response.use(
     (res) => res,
     (err) => {
         if (err.response?.status === 401) {
-            localStorage.removeItem('token');
-            localStorage.removeItem('user');
-            if (window.location.pathname !== '/login') {
-                window.location.href = '/login';
+            const requestUrl = err.config?.url || '';
+            // Don't clear tokens for auth-related endpoints (login, register, google)
+            // These 401s are expected (wrong password, etc.) and should not cause logout
+            const isAuthEndpoint = requestUrl.includes('/api/auth/login') ||
+                requestUrl.includes('/api/auth/register') ||
+                requestUrl.includes('/api/auth/google');
+
+            if (!isAuthEndpoint) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+                    window.location.href = '/login';
+                }
             }
         }
         return Promise.reject(err);

@@ -1,7 +1,7 @@
 /**
  * Login page — clean, minimal design with Google Sign-In.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../hooks/useTheme';
@@ -18,6 +18,26 @@ export default function Login() {
     const { dark, toggle } = useTheme();
     const navigate = useNavigate();
 
+    // Use ref to always have the latest googleLogin function in the callback
+    const googleLoginRef = useRef(googleLogin);
+    const navigateRef = useRef(navigate);
+    const toastRef = useRef(toast);
+    useEffect(() => { googleLoginRef.current = googleLogin; }, [googleLogin]);
+    useEffect(() => { navigateRef.current = navigate; }, [navigate]);
+    useEffect(() => { toastRef.current = toast; }, [toast]);
+
+    const handleGoogleResponse = useCallback(async (response) => {
+        try {
+            await googleLoginRef.current(response.credential);
+            toastRef.current.success('Signed in with Google!');
+            navigateRef.current('/dashboard');
+        } catch (err) {
+            // Error is shown, but don't clear auth state — that's handled by the interceptor
+            const el = document.getElementById('login-error');
+            if (el) el.textContent = err.response?.data?.detail || 'Google sign-in failed';
+        }
+    }, []);
+
     // Load Google Sign-In script
     useEffect(() => {
         const script = document.createElement('script');
@@ -25,41 +45,27 @@ export default function Login() {
         script.async = true;
         script.defer = true;
         document.body.appendChild(script);
-        script.onload = () => initGoogle();
-        return () => { document.body.removeChild(script); };
-    }, []);
-
-    const initGoogle = () => {
-        if (!window.google) return;
-        window.google.accounts.id.initialize({
-            client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
-            callback: handleGoogleResponse,
-        });
-        const btnEl = document.getElementById('google-signin-btn');
-        if (btnEl) {
-            window.google.accounts.id.renderButton(btnEl, {
-                theme: 'outline',
-                size: 'large',
-                width: '100%',
-                text: 'signin_with',
-                shape: 'rectangular',
+        script.onload = () => {
+            if (!window.google) return;
+            window.google.accounts.id.initialize({
+                client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
+                callback: handleGoogleResponse,
             });
-        }
-    };
-
-    const handleGoogleResponse = async (response) => {
-        setLoading(true);
-        setError('');
-        try {
-            await googleLogin(response.credential);
-            toast.success('Signed in with Google!');
-            navigate('/dashboard');
-        } catch (err) {
-            setError(err.response?.data?.detail || 'Google sign-in failed');
-        } finally {
-            setLoading(false);
-        }
-    };
+            const btnEl = document.getElementById('google-signin-btn');
+            if (btnEl) {
+                window.google.accounts.id.renderButton(btnEl, {
+                    theme: 'outline',
+                    size: 'large',
+                    width: '100%',
+                    text: 'signin_with',
+                    shape: 'rectangular',
+                });
+            }
+        };
+        return () => {
+            try { document.body.removeChild(script); } catch { }
+        };
+    }, [handleGoogleResponse]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -94,7 +100,7 @@ export default function Login() {
                 </div>
 
                 {error && (
-                    <div style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '0.625rem 0.875rem', borderRadius: 8, fontSize: '0.8125rem', marginBottom: '1rem' }}>
+                    <div id="login-error" style={{ background: 'var(--danger-light)', color: 'var(--danger)', padding: '0.625rem 0.875rem', borderRadius: 8, fontSize: '0.8125rem', marginBottom: '1rem' }}>
                         {error}
                     </div>
                 )}
